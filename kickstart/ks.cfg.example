@@ -515,6 +515,25 @@ if [ -z "$FIRST" ]; then
     exit 1
 fi
 
+# Wipe existing LVM metadata (prevents "name 'rl' is already in use" on reinstall)
+echo "=== Cleaning up existing LVM ==="
+vgchange -an 2>/dev/null || true
+for vg in $(vgs --noheadings -o vg_name 2>/dev/null); do
+    echo "Removing VG: $vg"
+    vgremove -ff "$vg" 2>/dev/null || true
+done
+for pv in $(pvs --noheadings -o pv_name 2>/dev/null); do
+    echo "Removing PV: $pv"
+    pvremove -ff "$pv" 2>/dev/null || true
+done
+
+# Wipe disk signatures on all detected disks
+for disk in $DISKS; do
+    echo "Wiping signatures on /dev/$disk"
+    wipefs -af "/dev/$disk" 2>/dev/null || true
+    dd if=/dev/zero of="/dev/$disk" bs=1M count=10 2>/dev/null || true
+done
+
 cat > /tmp/part-include << EOF
 zerombr
 clearpart --all --initlabel --disklabel=gpt
