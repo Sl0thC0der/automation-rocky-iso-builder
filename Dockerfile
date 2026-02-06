@@ -2,7 +2,7 @@ FROM rockylinux/rockylinux:10
 
 # ISO build toolchain
 RUN dnf -y update \
- && dnf -y install lorax xorriso isomd5sum curl ca-certificates \
+ && dnf -y install lorax xorriso isomd5sum curl ca-certificates createrepo_c dnf-plugins-core \
  && dnf clean all
 
 WORKDIR /work

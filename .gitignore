@@ -1,6 +1,10 @@
 *.iso
 ks.cfg
 .DS_Store
+NUL
+vm/
 .idea/
 .vscode/
 *.swp
+prebaked-rpms/
+output/
