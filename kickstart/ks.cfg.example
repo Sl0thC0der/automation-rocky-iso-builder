@@ -1,0 +1,62 @@
+#version=RHEL10
+# Unattended Rocky Linux install + Docker Engine + Podman
+#
+# WARNING: This example wipes the first detected disk.
+# Review carefully before use.
+
+text
+reboot
+eula --agreed
+lang en_US.UTF-8
+keyboard --xlayouts='us'
+timezone Europe/Zurich --utc
+
+# Networking (DHCP) + SSH
+network --bootproto=dhcp --device=link --activate --onboot=on
+services --enabled=sshd
+firewall --enabled --service=ssh
+selinux --enforcing
+
+# Accounts
+# Recommended: set a real password hash (see README note) or use SSH keys post-install
+rootpw --lock
+user --name=rocky --groups=wheel --password=rocky --plaintext
+
+# Disk (wipe + auto partition)
+zerombr
+clearpart --all --initlabel
+autopart --type=lvm --fstype=xfs
+
+%packages
+@^minimal-environment
+chrony
+curl
+ca-certificates
+dnf-plugins-core
+openssh-server
+%end
+
+%post --interpreter=/bin/bash
+set -euo pipefail
+
+# Pull newest packages available at install time
+dnf -y --refresh update
+
+# --- Podman (from Rocky repos) ---
+dnf -y install podman
+
+# Avoid the docker-compat wrapper when also installing Docker Engine
+dnf -y remove podman-docker || true
+
+# --- Docker Engine (from Docker's RHEL repo) ---
+dnf -y install dnf-plugins-core
+dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable docker
+
+# Optional: expose Podman API socket for Docker contexts -> Podman
+systemctl enable podman.socket || true
+
+# Add user to docker group (takes effect after re-login)
+usermod -aG docker rocky || true
+%end
