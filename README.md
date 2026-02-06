@@ -1,88 +1,117 @@
-# Rocky Kickstart ISO Builder (Docker + Podman)
+# Rocky Kickstart ISO Builder
 
-This repo produces a **bootable Rocky Linux installer ISO** with an embedded **Kickstart** (`ks.cfg`) by using a **Docker container** that runs `mkksiso` (from `lorax`).
+Produces a **bootable Rocky Linux installer ISO** with an embedded Kickstart and optional **pre-baked RPM packages**. After a single unattended boot, the machine has SSH, Docker Engine, Podman, Cockpit, fail2ban, and a full DevOps toolset — ready to use over the network.
 
-It targets this workflow:
+## Repo Layout
 
-- You have hardware on hand
-- You want an unattended Rocky install
-- After first boot, the machine has **Podman** *and* **Docker Engine** installed
-- "Newest" means newest **available in repos** at install time (Rocky repos for Podman; Docker's official repo for Docker Engine)
-
-## Repo layout
-
-- `Dockerfile` — builds the ISO-builder container image (includes `mkksiso`)
-- `kickstart/ks.cfg.example` — Kickstart template (edit to taste)
-- `scripts/build_iso.sh` — one-command ISO build wrapper
+```
+build.ps1                    # PowerShell wrapper (Windows)
+Dockerfile                   # ISO-builder container image
+kickstart/ks.cfg.example     # Kickstart template (copy to ks.cfg)
+scripts/
+  build_iso.sh               # Main build script (Bash)
+  download_rpms.sh           # RPM downloader for pre-baking
+  pkg-list.conf              # Package list (edit to add/remove packages)
+```
 
 ## Prerequisites
 
-- A Linux machine with Docker installed (to build/run the ISO-builder container)
-- An input Rocky ISO (DVD or Boot ISO), e.g. `Rocky-*.iso`
-- Enough disk space (ISO extraction + rebuild can require multiple GB)
+- **Docker Desktop** running
+- **Git Bash** (comes with Git for Windows)
+- A Rocky Linux DVD ISO (e.g. `Rocky-10.1-x86_64-dvd1.iso`)
 
-## Quick start
+## Quick Start
 
-1) Put a Rocky ISO into the repo directory:
+1. Place a Rocky ISO in the repo root:
+   ```
+   Rocky-10.1-x86_64-dvd1.iso
+   ```
 
-```bash
-cp ~/Downloads/Rocky-*.iso ./Rocky.iso
+2. Copy and customize the kickstart:
+   ```powershell
+   cp kickstart/ks.cfg.example ks.cfg
+   # Edit ks.cfg: change user/password, SSH key, keyboard, timezone
+   ```
+
+3. Build the ISO:
+   ```powershell
+   .\build.ps1
+   ```
+
+   Or from Git Bash:
+   ```bash
+   ./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso -p
+   ```
+
+4. Write to USB with **Rufus** (DD mode) or **balenaEtcher**, then boot your target machine.
+
+## Build Options
+
+### PowerShell
+```powershell
+.\build.ps1                                          # Default: pre-bake enabled
+.\build.ps1 -NoPrebake                               # Skip pre-baking (smaller ISO, slower install)
+.\build.ps1 -InputISO "Rocky-10.1-x86_64-dvd1.iso"  # Custom input ISO
+.\build.ps1 -Kickstart "my-ks.cfg"                   # Custom kickstart
 ```
 
-2) Copy and edit the Kickstart:
-
+### Bash
 ```bash
-cp kickstart/ks.cfg.example ks.cfg
-# edit ks.cfg (user/password, disk layout, packages, etc.)
+./scripts/build_iso.sh -i <input.iso> -k <ks.cfg> -o <output.iso> [-p] [-P <pkg-list>]
 ```
 
-3) Build the ISO:
+| Flag | Description |
+|------|-------------|
+| `-i` | Input Rocky ISO |
+| `-k` | Kickstart file |
+| `-o` | Output ISO path |
+| `-p` | Pre-bake RPMs into the ISO |
+| `-P` | Custom package list file (implies `-p`) |
+| `-t` | Docker image tag (default: `rocky-iso-maker`) |
 
-```bash
-./scripts/build_iso.sh -i Rocky.iso -k ks.cfg -o Rocky-ks.iso
-```
+## Pre-baked RPMs
 
-4) Write `Rocky-ks.iso` to a USB stick (example; be careful with `/dev/sdX`):
+The `-p` flag downloads all packages from `scripts/pkg-list.conf` at build time and embeds them in the ISO. At install time, the kickstart detects and uses them automatically — most packages install from the local ISO instead of downloading.
 
-```bash
-sudo dd if=Rocky-ks.iso of=/dev/sdX bs=4M status=progress oflag=sync
-```
+**Packages are organized by repo in `pkg-list.conf`:**
+- `[rocky]` — DevOps tools, Podman, Cockpit, firmware, security tools
+- `[epel]` — fail2ban, epel-release
+- `[docker-ce]` — Docker Engine, CLI, Buildx, Compose
+- `[warp]` — Warp terminal
 
-5) Boot your target machine from the USB. Installation should run unattended.
+To add or remove packages, edit `scripts/pkg-list.conf` and rebuild.
 
-## What the Kickstart does
+**ISO size:** ~9.5 GB with pre-bake (vs ~8.6 GB without). Fits on a 16 GB USB.
 
-The provided `kickstart/ks.cfg.example`:
+## What Gets Installed
 
-- Installs a minimal Rocky system (minimal environment)
-- Enables SSH
-- Runs `dnf --refresh update` in `%post` (pull newest packages available at that time)
-- Installs:
-  - Podman (from Rocky repos)
-  - Docker Engine + Buildx + Compose plugin (from Docker's RHEL repo)
-- Enables Docker (`systemctl enable docker`) and optionally the Podman API socket (`podman.socket`) so you can target Podman via Docker contexts
+| Category | Packages |
+|----------|----------|
+| Container engines | Docker Engine, Podman, Buildah, Skopeo |
+| Docker extras | Compose, Buildx, rootless extras |
+| Podman extras | podman-compose, podman-remote, Netavark, passt |
+| Web console | Cockpit + storage/network/podman/SELinux modules |
+| Security | fail2ban, SELinux enforcing, SSH hardening, auditd |
+| DevOps tools | git, vim, tmux, htop, jq, ansible-core, nmap, strace, tcpdump |
+| AI tools | Claude Code, Codex (via npm) |
+| Terminal | Warp terminal |
+| Monitoring | Cockpit, sysstat, SNMP, persistent journald |
+| Maintenance | dnf-automatic (security updates), weekly Docker/Podman prune timers |
 
-## Switching Docker CLI between engines (optional)
+## Kickstart Details
 
-If `podman.socket` is enabled, you can create a Docker context that points to Podman's socket:
+- **Server environment** install, text mode, DHCP, SELinux enforcing
+- **Dynamic partitioning** via `%pre`: auto-detects first disk, EFI + /boot + 100% LVM root, no swap
+- **Wipes all disks** — review `ks.cfg` before use
+- **Hardened SSH**: key auth + password fallback, root login disabled, fail2ban (3 attempts / 1h ban)
+- **Docker + Podman coexistence**: both installed, no `podman-docker` conflict
+- **Password change on first login** via `/etc/profile.d/` script (doesn't block SSH key auth)
 
-```bash
-docker context create podman --docker "host=unix:///run/podman/podman.sock"
-docker context use podman
-docker ps
-```
+## Notes
 
-Switch back to Docker Engine:
-
-```bash
-docker context use default
-```
-
-## Notes / safety
-
-- The example Kickstart **wipes the first disk** (`clearpart --all`). Review before using.
-- Avoid installing `podman-docker` when you also install real Docker Engine. It can confuse the `docker` CLI/socket expectations.
-- Do **not** expose Docker's TCP socket (`2375`) to the internet.
+- Passwords in `ks.cfg.example` are plaintext — use `--iscrypted` with hashed passwords for production
+- Do not expose Docker TCP API (2375) publicly
+- The Docker build container runs with `--privileged` (required for ISO operations)
 
 ## License
 
