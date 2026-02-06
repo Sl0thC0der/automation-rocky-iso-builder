@@ -134,7 +134,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --privileged \
 set -euo pipefail
 
 # 1) Build the kickstart ISO
-mkksiso --ks /work/ks.cfg -c "inst.text console=tty0" /work/input.iso /work/out/'"${OUTPUT_NAME}"'
+mkksiso --ks /work/ks.cfg -c "inst.text console=tty0 rd.live.check=0" /work/input.iso /work/out/'"${OUTPUT_NAME}"'
 
 # 2) Clean GRUB menu: keep only "Install", no delay
 ISO="/work/out/'"${OUTPUT_NAME}"'"
@@ -164,7 +164,10 @@ xorriso -indev "${ISO}.tmp" -outdev "$ISO" \
 
 rm -f "${ISO}.tmp"
 rm -rf "$TMPDIR"
-echo "GRUB menu cleaned: Install only, no delay"
+
+# 4) Re-implant ISO checksum (xorriso repack invalidates the original)
+implantisomd5 "$ISO"
+echo "GRUB menu cleaned, ISO checksum implanted"
 '
 
 echo "Created: ${OUTPUT_ISO}"
