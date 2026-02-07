@@ -4,9 +4,11 @@
 # WARNING: This wipes ALL detected disks. OS installs on the first disk only.
 # Review carefully before use.
 
-text
+cmdline
 reboot
 eula --agreed
+# Installation source: auto-detected by dracut via inst.stage2=hd:LABEL=... on kernel cmdline.
+# Do NOT add 'cdrom' or 'inst.repo=cdrom' — both only scan optical /dev/sr* drives, not USB.
 lang en_US.UTF-8
 keyboard --xlayouts='ch(de)'
 timezone Europe/Zurich --utc
@@ -85,30 +87,36 @@ fi
 # ============================================================
 
 # Full system update and upgrade
-dnf -y --refresh update
-dnf -y --refresh upgrade
+dnf -y --refresh update || true
+dnf -y --refresh upgrade || true
 
 # Configure NTP to use Swiss METAS time server
-sed -i 's/^pool .*//' /etc/chrony.conf
-sed -i 's/^server .*//' /etc/chrony.conf
+sed -i '/^pool /d' /etc/chrony.conf
+sed -i '/^server /d' /etc/chrony.conf
 echo 'server ntp.metas.ch iburst' >> /etc/chrony.conf
-systemctl enable chronyd
+systemctl enable chronyd || true
+
+# Set hostname from DHCP (if DHCP server provides option 12, NM will use it)
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/hostname.conf << 'NMHOST'
+[main]
+hostname-mode=dhcp
+NMHOST
 
 # ============================================================
 # PACKAGES: Install additional software
 # ============================================================
 
-# EPEL repo (needed for fail2ban and other extras)
-dnf -y install epel-release
+# Enable CRB (CodeReady Builder) - required by EPEL dependencies
+# Try DNF5 syntax first, fall back to DNF4
+dnf config-manager setopt crb.enabled=1 2>/dev/null || dnf config-manager --set-enabled crb 2>/dev/null || true
 
-# Remove firewall early (before fail2ban install, so fail2ban-firewalld is not pulled in)
-systemctl stop firewalld || true
-systemctl disable firewalld || true
-dnf -y remove firewalld || true
+# EPEL repo (needed for fail2ban and other extras)
+dnf -y install epel-release || true
 
 # Install firmware and drivers
-dnf -y install linux-firmware dracut-config-generic
-dnf -y install pciutils usbutils lshw
+dnf -y install linux-firmware dracut-config-generic || true
+dnf -y install pciutils usbutils lshw || true
 dnf -y groupinstall "Hardware Monitoring Utilities" || true
 
 # Security tools
@@ -140,7 +148,7 @@ dnf -y install \
   python3-pip \
   socat \
   iftop \
-  iotop \
+  iotop-c \
   mtr \
   open-vm-tools || true
 
@@ -167,18 +175,21 @@ gpgcheck=1
 gpgkey=https://releases.warp.dev/linux/keys/warp.asc
 WARP
 dnf -y install warp-terminal || true
+# warp-terminal RPM creates its own warpdotdev.repo — remove our duplicate
+rm -f /etc/yum.repos.d/warp.repo
 
 # --- Podman (from Rocky repos) ---
-dnf -y install podman
+dnf -y install podman || true
 
 # Avoid the docker-compat wrapper when also installing Docker Engine
 dnf -y remove podman-docker || true
 
 # --- Docker Engine (from Docker's RHEL repo) ---
-dnf -y install dnf-plugins-core
-dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
-dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-systemctl enable docker
+dnf -y install dnf-plugins-core || true
+# Add Docker CE repo (portable: curl the repo file directly, works on DNF4 and DNF5)
+curl -fsSL https://download.docker.com/linux/rhel/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo || true
+dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || true
+systemctl enable docker || true
 
 # Docker daemon config (production-hardened)
 mkdir -p /etc/docker
@@ -198,7 +209,6 @@ cat > /etc/docker/daemon.json << 'DOCKERCFG'
   "userland-proxy": false,
   "no-new-privileges": true,
   "icc": false,
-  "exec-opts": ["native.cgroupdriver=systemd"],
   "max-concurrent-downloads": 10,
   "max-concurrent-uploads": 10,
   "shutdown-timeout": 15,
@@ -244,9 +254,6 @@ dnf -y install \
   aardvark-dns \
   passt || true
 
-# skopeo (container image inspection tool)
-dnf -y install skopeo || true
-
 # Docker tools
 dnf -y install docker-ce-rootless-extras || true
 
@@ -257,7 +264,7 @@ systemctl enable podman.socket || true
 systemctl enable podman-auto-update.timer || true
 
 # Rootless Podman: configure subuid/subgid for adminlocal
-usermod --add-subuids 100000-165535 --add-subgids 100000-165535 adminlocal
+usermod --add-subuids 100000-165535 --add-subgids 100000-165535 adminlocal || true
 
 # Podman registry configuration
 cat > /etc/containers/registries.conf << 'REGCONF'
@@ -298,22 +305,20 @@ SSHD
 cat > /etc/fail2ban/jail.local << 'F2B'
 [sshd]
 enabled = true
+banaction = nftables-multiport
 bantime = 3600
 findtime = 600
 maxretry = 3
 F2B
-systemctl enable fail2ban
+systemctl enable fail2ban || true
 
 # Cockpit web console (port 9090)
 dnf -y install \
   cockpit \
   cockpit-storaged \
-  cockpit-networkmanager \
   cockpit-packagekit \
-  cockpit-podman \
-  cockpit-selinux \
-  cockpit-sosreport || true
-systemctl enable cockpit.socket
+  cockpit-podman || true
+systemctl enable cockpit.socket || true
 
 # Cockpit idle timeout
 mkdir -p /etc/cockpit
@@ -332,7 +337,7 @@ random_sleep = 3600
 [emitters]
 emit_via = stdio
 DNFAUTO
-systemctl enable dnf-automatic.timer
+systemctl enable dnf-automatic.timer || true
 
 # Persistent journald logging
 mkdir -p /var/log/journal
@@ -362,7 +367,27 @@ cat > /etc/audit/rules.d/docker.rules << 'AUDIT'
 -w /usr/bin/runc -p wa -k runc
 -w /usr/bin/crun -p wa -k crun
 AUDIT
-systemctl enable auditd
+systemctl enable auditd || true
+
+# Load kernel modules required for container networking sysctl settings
+cat > /etc/modules-load.d/containers.conf << 'MODULES'
+br_netfilter
+nf_conntrack
+overlay
+MODULES
+
+# Pre-load modules now so sysctl values can be applied during this %post
+modprobe br_netfilter || true
+modprobe nf_conntrack || true
+modprobe overlay || true
+
+# Ensure systemd-sysctl runs after modules are loaded on every boot
+mkdir -p /etc/systemd/system/systemd-sysctl.service.d
+cat > /etc/systemd/system/systemd-sysctl.service.d/after-modules.conf << 'SYSCTL_ORDER'
+[Unit]
+After=systemd-modules-load.service
+Wants=systemd-modules-load.service
+SYSCTL_ORDER
 
 # Kernel tuning for container workloads
 cat > /etc/sysctl.d/99-docker.conf << 'SYSCTL'
@@ -409,7 +434,7 @@ net.core.netdev_max_backlog = 65536
 
 # Memory
 vm.overcommit_memory = 1
-vm.swappiness = 10
+vm.swappiness = 0
 SYSCTL
 
 # Weekly Docker cleanup timer
@@ -465,18 +490,21 @@ systemctl enable podman-cleanup.timer || true
 # Rebuild initramfs with all drivers
 dracut --force --regenerate-all || true
 
-# Remove old kernels
-dnf remove --oldinstallonly -y || true
+# Remove old kernels (keep max 2)
 dnf remove --oldinstallonly --setopt installonly_limit=2 -y || true
 
 # Configure and enable SNMP
-echo "rocommunity public" >> /etc/snmp/snmpd.conf
-systemctl enable snmpd
+cat > /etc/snmp/snmpd.conf << 'SNMPCONF'
+rocommunity public
+syslocation Server Room
+syscontact admin@localhost
+SNMPCONF
+systemctl enable snmpd || true
 
 # Force password change on first interactive (console/password) login
 # Uses a profile script instead of chage -d 0, so SSH key auth is not blocked
 cat > /etc/profile.d/force-passwd-change.sh << 'PWCHANGE'
-if [ "$(id -un)" = "adminlocal" ] && [ -f /var/lib/force-passwd-change ]; then
+if [ "$(id -un)" = "adminlocal" ] && [ -f /var/lib/force-passwd-change ] && [ -t 0 ]; then
     echo ""
     echo "============================================"
     echo "  You must change your password now."
@@ -491,6 +519,15 @@ PWCHANGE
 chmod 644 /etc/profile.d/force-passwd-change.sh
 touch /var/lib/force-passwd-change
 
+# Disable firewalld (do NOT dnf remove — it cascades and removes fail2ban via fail2ban-firewalld dep)
+# Masking prevents any package from re-enabling it; nftables is used directly by fail2ban
+systemctl stop firewalld || true
+systemctl disable firewalld || true
+systemctl mask firewalld || true
+
+# Clean up orphan packages
+dnf autoremove -y || true
+
 # Remove pre-baked local repo config (no longer needed after install)
 rm -f /etc/yum.repos.d/prebaked-local.repo
 umount /tmp/prebaked-rpms 2>/dev/null || true
@@ -502,16 +539,48 @@ rm -rf /var/tmp/*
 %end
 
 %pre --interpreter=/bin/bash --log=/tmp/pre-install.log
-# Detect all hard drives (list-harddrives auto-excludes the installer media).
-# Wipe everything, install OS on the first disk only.
+# Detect all hard drives and wipe them, EXCEPT the installer media (USB).
+# Install OS on the first non-installer disk only.
 # Layout: /boot/efi (512M) + /boot (2G) + / (100% LVM, no swap)
 # Additional disks are wiped but left unpartitioned for later use.
 
-DISKS=$(list-harddrives | awk '{print $1}' | sort)
-FIRST=$(echo "$DISKS" | head -1)
+# Identify the installer media so we don't wipe it.
+# Supports: dd-written USB (iso9660), Ventoy (VTOYEFI label), CD/DVD (not in list-harddrives).
+# PXE has no physical media so INSTALL_DEV stays empty (all disks wiped — correct).
+INSTALL_DEV=""
+ALL_DISKS=$(list-harddrives | awk '{print $1}' | sort)
+for dev in $ALL_DISKS; do
+    # Check all partitions and the whole disk for installer signatures
+    for part in /dev/${dev} /dev/${dev}[0-9]* /dev/${dev}p[0-9]*; do
+        [ -b "$part" ] || continue
+        BLKOUT=$(blkid "$part" 2>/dev/null) || continue
+        # dd-written ISO: whole disk or partition has iso9660
+        if echo "$BLKOUT" | grep -qi "iso9660"; then
+            INSTALL_DEV="$dev"
+            echo "Detected installer media (iso9660): /dev/$dev (will NOT wipe)"
+            break 2
+        fi
+        # Ventoy: has a partition labeled VTOYEFI or Ventoy
+        if echo "$BLKOUT" | grep -qiE 'LABEL="(VTOYEFI|Ventoy)"'; then
+            INSTALL_DEV="$dev"
+            echo "Detected installer media (Ventoy): /dev/$dev (will NOT wipe)"
+            break 2
+        fi
+    done
+done
+
+# Filter out the installer media from the disk list
+DISKS=""
+for dev in $ALL_DISKS; do
+    if [ "$dev" != "$INSTALL_DEV" ]; then
+        DISKS="$DISKS $dev"
+    fi
+done
+DISKS=$(echo "$DISKS" | xargs)  # trim whitespace
+FIRST=$(echo "$DISKS" | awk '{print $1}')
 
 if [ -z "$FIRST" ]; then
-    echo "ERROR: No hard drives detected!" >&2
+    echo "ERROR: No hard drives detected (excluding installer media)!" >&2
     exit 1
 fi
 
@@ -527,7 +596,7 @@ for pv in $(pvs --noheadings -o pv_name 2>/dev/null); do
     pvremove -ff "$pv" 2>/dev/null || true
 done
 
-# Wipe disk signatures on all detected disks
+# Wipe disk signatures on all detected disks (excluding installer media)
 for disk in $DISKS; do
     echo "Wiping signatures on /dev/$disk"
     wipefs -af "/dev/$disk" 2>/dev/null || true

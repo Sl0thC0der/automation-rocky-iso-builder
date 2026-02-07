@@ -8,14 +8,14 @@
 
 .EXAMPLE
     .\build.ps1
-    .\build.ps1 -NoPrebake
+    .\build.ps1 -Prebake
     .\build.ps1 -InputISO "Rocky-10.1-x86_64-dvd1.iso" -Kickstart "ks.cfg"
 #>
 param(
     [string]$InputISO = "Rocky-10.1-x86_64-dvd1.iso",
     [string]$Kickstart = "ks.cfg",
     [string]$OutputISO = "output/Rocky-ks.iso",
-    [switch]$NoPrebake
+    [switch]$Prebake
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,21 +58,29 @@ if (Test-Path $OutPath) {
 
 # Build command
 $flags = "-i `"$InputISO`" -k `"$Kickstart`" -o `"$OutputISO`""
-if (-not $NoPrebake) {
+if ($Prebake) {
     $flags += " -p"
 }
 
 $cmd = "cd '$($RepoDir -replace '\\','/')' && ./scripts/build_iso.sh $flags"
 
+$buildStart = Get-Date
+
 Write-Host ""
 Write-Host "=== Rocky Kickstart ISO Builder ===" -ForegroundColor Cyan
+Write-Host "  Started:   $($buildStart.ToString('yyyy-MM-dd HH:mm:ss'))"
 Write-Host "  Input:     $InputISO"
 Write-Host "  Kickstart: $Kickstart"
 Write-Host "  Output:    $OutputISO"
-Write-Host "  Pre-bake:  $(-not $NoPrebake)"
+Write-Host "  Pre-bake:  $Prebake"
 Write-Host ""
 
 & $GitBash -lc $cmd
+
+$buildEnd = Get-Date
+$elapsed = $buildEnd - $buildStart
+$elapsedStr = "{0:mm\:ss}" -f $elapsed
+if ($elapsed.TotalHours -ge 1) { $elapsedStr = "{0:hh\:mm\:ss}" -f $elapsed }
 
 if ($LASTEXITCODE -eq 0) {
     $iso = Get-Item $OutPath
@@ -80,6 +88,12 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "=== Done ===" -ForegroundColor Green
     Write-Host "  ISO: $OutPath ($sizeMB MB)"
+    Write-Host "  Finished:  $($buildEnd.ToString('yyyy-MM-dd HH:mm:ss'))"
+    Write-Host "  Duration:  $elapsedStr"
 } else {
+    Write-Host ""
+    Write-Host "=== FAILED ===" -ForegroundColor Red
+    Write-Host "  Finished:  $($buildEnd.ToString('yyyy-MM-dd HH:mm:ss'))"
+    Write-Host "  Duration:  $elapsedStr"
     Write-Error "Build failed with exit code $LASTEXITCODE"
 }

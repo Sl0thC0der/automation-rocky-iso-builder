@@ -75,8 +75,9 @@ KS_FILE_ABS="$(realpath "${KS_FILE}")"
 OUTPUT_DIR="$(mkdir -p "$(dirname "${OUTPUT_ISO}")" && realpath "$(dirname "${OUTPUT_ISO}")")"
 OUTPUT_NAME="$(basename "${OUTPUT_ISO}")"
 
-# Build the ISO maker image (Dockerfile lives in the repo root)
-docker build -t "${IMAGE_TAG}" "${REPO_DIR}"
+# Build the ISO maker image (skip if unchanged)
+echo "=== Building Docker image ==="
+DOCKER_BUILDKIT=1 docker build -t "${IMAGE_TAG}" "${REPO_DIR}"
 
 # ── Pre-bake RPMs (optional) ────────────────────────────────────────
 PREBAKE_DIR="${REPO_DIR}/prebaked-rpms"
@@ -120,7 +121,7 @@ if [[ "${PREBAKE}" == true && -d "${PREBAKE_DIR}" ]]; then
 fi
 
 # Build the xorriso -map arguments for GRUB + optional RPM injection
-XORRISO_MAPS='-map "$TMPDIR/grub-efi.cfg" /EFI/BOOT/grub.cfg -map "$TMPDIR/grub-boot.cfg" /boot/grub2/grub.cfg'
+XORRISO_MAPS='-map "$GRUBDIR/grub-efi.cfg" /EFI/BOOT/grub.cfg -map "$GRUBDIR/grub-boot.cfg" /boot/grub2/grub.cfg'
 if [[ "${PREBAKE}" == true ]]; then
   XORRISO_MAPS+=' -map /work/prebaked-rpms /prebaked-rpms'
 fi
@@ -128,46 +129,53 @@ fi
 MSYS_NO_PATHCONV=1 docker run --rm --privileged \
   --name rocky-iso-builder \
   --entrypoint bash \
+  --tmpfs /work/tmp:exec,size=12G \
   "${DOCKER_VOLS[@]}" \
   "${IMAGE_TAG}" \
   -c '
 set -euo pipefail
 
-# 1) Build the kickstart ISO
-mkksiso --ks /work/ks.cfg -c "inst.text console=tty0 rd.live.check=0" /work/input.iso /work/out/'"${OUTPUT_NAME}"'
+T0=$SECONDS
+
+# 1) Build the kickstart ISO — write to tmpfs (RAM), not the slow bind mount
+echo "=== [1/4] mkksiso: embedding kickstart ==="
+mkksiso --ks /work/ks.cfg -c "inst.cmdline inst.sshd nomodeset console=tty0 rd.live.check=0" /work/input.iso /work/tmp/intermediate.iso
+echo "    mkksiso done in $(( SECONDS - T0 ))s"
 
 # 2) Clean GRUB menu: keep only "Install", no delay
-ISO="/work/out/'"${OUTPUT_NAME}"'"
-TMPDIR=$(mktemp -d)
+echo "=== [2/4] Cleaning GRUB menu ==="
+T1=$SECONDS
+GRUBDIR=$(mktemp -d)
 
-xorriso -indev "$ISO" -osirrox on \
-    -extract /EFI/BOOT/grub.cfg "$TMPDIR/grub-efi.cfg" \
-    -extract /boot/grub2/grub.cfg "$TMPDIR/grub-boot.cfg"
+xorriso -indev /work/tmp/intermediate.iso -osirrox on \
+    -extract /EFI/BOOT/grub.cfg "$GRUBDIR/grub-efi.cfg" \
+    -extract /boot/grub2/grub.cfg "$GRUBDIR/grub-boot.cfg"
 
-for f in "$TMPDIR/grub-efi.cfg" "$TMPDIR/grub-boot.cfg"; do
-    # Remove "Test this media" entry
+for f in "$GRUBDIR/grub-efi.cfg" "$GRUBDIR/grub-boot.cfg"; do
     sed -i "/^menuentry.*Test this media/,/^}/d" "$f"
-    # Remove "FIPS mode" entry
     sed -i "/^menuentry.*FIPS mode/,/^}/d" "$f"
-    # Remove Troubleshooting submenu (from submenu line to closing brace)
     sed -i "/^submenu/,/^}/d" "$f"
-    # Boot immediately, no delay
     sed -i "s/^set timeout=.*/set timeout=0/" "$f"
     sed -i "s/^set default=.*/set default=\"0\"/" "$f"
 done
+echo "    GRUB cleanup done in $(( SECONDS - T1 ))s"
 
-# 3) Repack ISO: GRUB configs + optional pre-baked RPMs in a single xorriso pass
-mv "$ISO" "${ISO}.tmp"
-xorriso -indev "${ISO}.tmp" -outdev "$ISO" \
+# 3) Repack ISO: read from tmpfs (fast), write to output bind mount
+echo "=== [3/4] Repacking ISO ==="
+T2=$SECONDS
+xorriso -indev /work/tmp/intermediate.iso -outdev /work/out/'"${OUTPUT_NAME}"' \
     -boot_image any replay \
     '"${XORRISO_MAPS}"'
+rm -f /work/tmp/intermediate.iso
+rm -rf "$GRUBDIR"
+echo "    Repack done in $(( SECONDS - T2 ))s"
 
-rm -f "${ISO}.tmp"
-rm -rf "$TMPDIR"
-
-# 4) Re-implant ISO checksum (xorriso repack invalidates the original)
-implantisomd5 "$ISO"
-echo "GRUB menu cleaned, ISO checksum implanted"
+# 4) Implant checksum
+echo "=== [4/4] Implanting checksum ==="
+T3=$SECONDS
+implantisomd5 /work/out/'"${OUTPUT_NAME}"'
+echo "    Checksum done in $(( SECONDS - T3 ))s"
+echo "=== Total: $(( SECONDS - T0 ))s ==="
 '
 
 echo "Created: ${OUTPUT_ISO}"
