@@ -58,6 +58,30 @@ tags
 *.sublime-project
 *.sublime-workspace
 
+# === AI Coding Assistants ===
+# Claude Code
+.claude/
+
+# Cursor IDE
+.cursor/
+
+# Aider
+.aider*
+
+# GitHub Copilot
+.copilot/
+
+# Continue.dev
+.continue/
+
+# Windsurf IDE
+.windsurf/
+
+# AI chat exports & logs
+*-chat-export.*
+ai-conversation.*
+*.ai-chat
+
 # === Temporary & backup files ===
 *.bak
 *.tmp
