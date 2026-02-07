@@ -40,7 +40,7 @@ scripts/
 
    Or from Git Bash:
    ```bash
-   ./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso -p
+   ./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso
    ```
 
 4. Write to USB with **Rufus** (DD mode) or **balenaEtcher**, then boot your target machine.
@@ -49,8 +49,8 @@ scripts/
 
 ### PowerShell
 ```powershell
-.\build.ps1                                          # Default: pre-bake enabled
-.\build.ps1 -NoPrebake                               # Skip pre-baking (smaller ISO, slower install)
+.\build.ps1                                          # Default: no pre-bake (fresh packages from internet)
+.\build.ps1 -Prebake                                 # Pre-bake RPMs into ISO (faster install, larger ISO)
 .\build.ps1 -InputISO "Rocky-10.1-x86_64-dvd1.iso"  # Custom input ISO
 .\build.ps1 -Kickstart "my-ks.cfg"                   # Custom kickstart
 ```
@@ -71,7 +71,7 @@ scripts/
 
 ## Pre-baked RPMs
 
-The `-p` flag downloads all packages from `scripts/pkg-list.conf` at build time and embeds them in the ISO. At install time, the kickstart detects and uses them automatically — most packages install from the local ISO instead of downloading.
+The `-p` flag (or `.\build.ps1 -Prebake`) downloads all packages from `scripts/pkg-list.conf` at build time and embeds them in the ISO. At install time, the kickstart detects and uses them automatically — most packages install from the local ISO instead of downloading.
 
 **Packages are organized by repo in `pkg-list.conf`:**
 - `[rocky]` — DevOps tools, Podman, Cockpit, firmware, security tools
@@ -90,9 +90,9 @@ To add or remove packages, edit `scripts/pkg-list.conf` and rebuild.
 | Container engines | Docker Engine, Podman, Buildah, Skopeo |
 | Docker extras | Compose, Buildx, rootless extras |
 | Podman extras | podman-compose, podman-remote, Netavark, passt |
-| Web console | Cockpit + storage/network/podman/SELinux modules |
-| Security | fail2ban, SELinux enforcing, SSH hardening, auditd |
-| DevOps tools | git, vim, tmux, htop, jq, ansible-core, nmap, strace, tcpdump |
+| Web console | Cockpit + storage/packagekit/podman modules |
+| Security | fail2ban (nftables), SELinux enforcing, SSH hardening, auditd, firewalld masked |
+| DevOps tools | git, vim, tmux, htop, jq, ansible-core, nmap, strace, tcpdump, iotop-c |
 | AI tools | Claude Code, Codex (via npm) |
 | Terminal | Warp terminal |
 | Monitoring | Cockpit, sysstat, SNMP, persistent journald |
@@ -100,18 +100,26 @@ To add or remove packages, edit `scripts/pkg-list.conf` and rebuild.
 
 ## Kickstart Details
 
-- **Server environment** install, text mode, DHCP, SELinux enforcing
+- **Server environment** install (cmdline mode), DHCP networking, SSH enabled, SELinux enforcing
 - **Dynamic partitioning** via `%pre`: auto-detects first disk, EFI + /boot + 100% LVM root, no swap
-- **Wipes all disks** — review `ks.cfg` before use
+- **Boot media detection**: safely skips installer media (dd-written USB, Ventoy, CD/DVD) when wiping disks; PXE has no media so all disks are wiped
+- **Wipes all non-installer disks** — review `ks.cfg` before use
 - **Hardened SSH**: key auth + password fallback, root login disabled, fail2ban (3 attempts / 1h ban)
 - **Docker + Podman coexistence**: both installed, no `podman-docker` conflict
-- **Password change on first login** via `/etc/profile.d/` script (doesn't block SSH key auth)
+- **Firewalld masked** (not removed — removing cascades and breaks fail2ban); nftables used directly
+- **Password change on first login** via `/etc/profile.d/` script (only on interactive terminals, doesn't block SSH key auth or non-interactive commands)
+- **Hostname from DHCP**: NetworkManager configured to accept hostname from DHCP option 12
+
+## Build Performance
+
+The build uses a RAM-backed tmpfs for intermediate ISO operations, reducing build time from ~11 minutes to ~5 minutes on Docker Desktop (Windows/WSL2).
 
 ## Notes
 
 - Passwords in `ks.cfg.example` are plaintext — use `--iscrypted` with hashed passwords for production
 - Do not expose Docker TCP API (2375) publicly
 - The Docker build container runs with `--privileged` (required for ISO operations)
+- `inst.sshd` is enabled on the installer kernel cmdline for debugging — remove for production
 
 ## License
 

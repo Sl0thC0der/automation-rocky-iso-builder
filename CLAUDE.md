@@ -10,13 +10,14 @@ Build an easy-to-deploy Rocky Linux installer ISO for spare hardware that comes 
 
 ### PowerShell (Windows — recommended)
 ```powershell
-.\build.ps1                # with pre-baked RPMs (default)
-.\build.ps1 -NoPrebake     # without pre-baking
+.\build.ps1                # default: no pre-bake (fresh packages from internet)
+.\build.ps1 -Prebake       # pre-bake RPMs into ISO for offline/faster installs
 ```
 
 ### Git Bash
 ```bash
-./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso -p
+./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso
+./scripts/build_iso.sh -i Rocky-10.1-x86_64-dvd1.iso -k ks.cfg -o output/Rocky-ks.iso -p  # with pre-bake
 ```
 
 ### Flags
@@ -31,15 +32,15 @@ Build an easy-to-deploy Rocky Linux installer ISO for spare hardware that comes 
 
 ## Architecture
 
-**Build pipeline:** `build.ps1` → `build_iso.sh` validates inputs → resolves absolute paths → builds Docker image from `Dockerfile` → (optional) downloads RPMs in container → runs `mkksiso` in container → cleans GRUB menu → injects pre-baked RPMs via xorriso → produces bootable ISO.
+**Build pipeline:** `build.ps1` → `build_iso.sh` validates inputs → builds Docker image (`DOCKER_BUILDKIT=1`) → (optional) downloads RPMs in container → runs `mkksiso` writing to tmpfs (RAM) → cleans GRUB menu → repacks ISO with xorriso (reads from tmpfs) → implants checksum → writes final ISO to output.
 
 ### File Layout
 
 | File | Purpose |
 |------|---------|
-| `build.ps1` | PowerShell wrapper for Windows usage |
-| `Dockerfile` | Rocky 10 image with `lorax`, `xorriso`, `createrepo_c` |
-| `scripts/build_iso.sh` | Main build orchestration (Bash) |
+| `build.ps1` | PowerShell wrapper for Windows (default: no prebake, `-Prebake` to opt in) |
+| `Dockerfile` | Rocky 10 image with `lorax`, `xorriso`, `isomd5sum`, `createrepo_c` |
+| `scripts/build_iso.sh` | Main build orchestration (Bash, uses tmpfs for intermediate ISO) |
 | `scripts/download_rpms.sh` | RPM downloader (runs inside Docker container) |
 | `scripts/pkg-list.conf` | Declarative package list with repo sections |
 | `kickstart/ks.cfg.example` | Template kickstart (copy to `ks.cfg` and customize) |
@@ -73,11 +74,21 @@ The `-p` flag enables RPM pre-baking:
 
 ## Kickstart Behavior
 
-- Server environment Rocky install (text mode), DHCP networking, SSH enabled, SELinux enforcing, firewall disabled
+- Server environment Rocky install (cmdline mode), DHCP networking, SSH enabled, SELinux enforcing
 - Dynamic partitioning via `%pre`: first disk only, wipe all, EFI + /boot + LVM root (no swap)
+- Boot media detection in `%pre`: skips dd-written USB (iso9660), Ventoy (VTOYEFI/Ventoy labels), CD/DVD (not in list-harddrives); PXE has no media so all disks are wiped
 - `%post --nochroot`: detects pre-baked RPM repo on ISO, bind-mounts into chroot
-- `%post`: full `dnf update`, installs EPEL, removes firewalld, installs Docker/Podman/Cockpit/fail2ban/DevOps tools, hardens SSH, configures kernel tuning, sets up cleanup timers
-- **`podman-plugins` does NOT exist on Rocky 10** — do not add it
+- `%post`: full `dnf update`, installs EPEL+CRB, installs Docker/Podman/Cockpit/fail2ban/DevOps tools, hardens SSH, configures kernel tuning, sets up cleanup timers
+- Firewalld is **masked** (not removed — `dnf remove firewalld` cascades and removes fail2ban); fail2ban uses `nftables-multiport` directly
+- Hostname set from DHCP via `hostname-mode=dhcp` in NetworkManager config
+- Password change script has `[ -t 0 ]` guard — only fires on interactive terminals
+
+### Rocky 10 Package Gotchas
+
+- `iotop` → `iotop-c` (C reimplementation)
+- `cockpit-networkmanager`, `cockpit-selinux`, `cockpit-sosreport` → don't exist (merged into `cockpit-system`)
+- `npm` → installed as `nodejs-npm` (bundled with `nodejs`); `rpm -q npm` fails but `which npm` works
+- `podman-plugins` does NOT exist on Rocky 10
 
 ## Key Considerations
 
@@ -87,4 +98,6 @@ The `-p` flag enables RPM pre-baking:
 - `%post` must NOT use `set -euo pipefail` — one failed package kills the entire script
 - `%post` (chrooted) CANNOT see ISO mount paths — use `%post --nochroot` with bind-mount for ISO access
 - Anaconda ISO mount paths: `/run/install/sources/mount-*-cdrom/` (modern RHEL9+) or `/run/install/repo/` (legacy)
-- No test suite or CI/CD exists; validation is manual (build ISO, boot VM, verify over SSH)
+- Do NOT use `cdrom` directive or `inst.repo=cdrom` — both only scan optical `/dev/sr*`, not USB
+- `inst.sshd` is on kernel cmdline for debugging — **remove for production** (TODO)
+- No test suite or CI/CD exists; validation is manual (build ISO, boot, verify over SSH)
