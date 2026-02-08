@@ -286,14 +286,8 @@ dnf -y install \
 # yq (YAML processor)
 pip3 install --break-system-packages yq || true
 
-# Node.js (needed for Claude Code and Codex)
+# Node.js
 dnf -y install nodejs npm || true
-
-# Claude Code (Anthropic CLI)
-npm install -g @anthropic-ai/claude-code || true
-
-# Codex (OpenAI CLI)
-npm install -g @openai/codex || true
 
 # Warp terminal
 rpm --import https://releases.warp.dev/linux/keys/warp.asc || true

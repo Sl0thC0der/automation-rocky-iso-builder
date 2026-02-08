@@ -99,7 +99,6 @@ To add or remove packages, edit `scripts/pkg-list.conf` and rebuild.
 | Web console | Cockpit + storage/packagekit/podman modules |
 | Security | fail2ban (nftables), SELinux enforcing, SSH hardening, auditd, firewalld masked |
 | DevOps tools | git, vim, tmux, htop, jq, ansible-core, nmap, strace, tcpdump, iotop-c |
-| AI tools | Claude Code, Codex (via npm) |
 | Terminal | Warp terminal |
 | Monitoring | Cockpit, sysstat, SNMP, persistent journald |
 | Maintenance | dnf-automatic (security updates), weekly Docker/Podman prune timers |

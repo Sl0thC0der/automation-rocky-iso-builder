@@ -55,7 +55,7 @@ The `-p` flag enables RPM pre-baking:
 5. Kickstart `%post --nochroot` detects the repo, bind-mounts it into chroot at `/tmp/prebaked-rpms`
 6. All `dnf install` commands in `%post` transparently use the local repo first
 
-**Still requires network:** `dnf update/upgrade`, `npm install` (claude-code, codex), `pip3 install yq`
+**Still requires network:** `dnf update/upgrade`, `pip3 install yq`
 
 ## Expected Usage
 
