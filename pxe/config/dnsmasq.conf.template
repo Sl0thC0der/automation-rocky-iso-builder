@@ -1,0 +1,20 @@
+# dnsmasq configuration for PXE boot (TFTP-only mode)
+# Requires external DHCP server to provide Option 66 (Next-Server) and Option 67 (Boot Filename)
+
+# Disable DNS
+port=0
+
+# Network interface
+interface=eth0
+bind-interfaces
+
+# TFTP settings
+enable-tftp
+tftp-root=/tftpboot
+tftp-secure
+tftp-lowercase
+
+# Logging
+log-facility=/var/log/dnsmasq.log
+log-dhcp
+log-queries

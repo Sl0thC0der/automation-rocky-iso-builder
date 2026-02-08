@@ -45,6 +45,12 @@ scripts/
 
 4. Write to USB with **Rufus** (DD mode) or **balenaEtcher**, then boot your target machine.
 
+   **Alternative:** Serve over the network via PXE:
+   ```powershell
+   .\pxe\start_pxe_server.ps1
+   ```
+   Then PXE boot your target machine. See [PXE Boot Server](#pxe-boot-server) below.
+
 ## Build Options
 
 ### PowerShell
@@ -113,6 +119,53 @@ To add or remove packages, edit `scripts/pkg-list.conf` and rebuild.
 ## Build Performance
 
 The build uses a RAM-backed tmpfs for intermediate ISO operations, reducing build time from ~11 minutes to ~5 minutes on Docker Desktop (Windows/WSL2).
+
+## PXE Boot Server
+
+Deploy the built ISO over the network for PXE boot, eliminating the need for USB/DVD media.
+
+### Quick Start
+
+**Default mode (requires one-time DHCP configuration):**
+```powershell
+.\pxe\start_pxe_server.ps1
+```
+
+**Proxy mode (fully automated, no DHCP config needed):**
+```powershell
+.\pxe\start_pxe_server.ps1 -ProxyDHCP
+```
+
+Then boot target machines via PXE.
+
+### How It Works
+
+1. PXE server runs TFTP (dnsmasq) + HTTP (nginx) in a container
+2. Boot files (vmlinuz, initrd.img) are auto-extracted from the ISO
+3. Client machines PXE boot and download the installer from the network
+4. Kickstart runs unattended, just like the USB/DVD install
+
+### Features
+
+- **Dual mode:** Manual DHCP (simple) or DHCP proxy (automated)
+- **Auto-detection:** Detects host IP and configures PXE menu automatically
+- **Cross-platform:** PowerShell (Windows) or Bash (Linux/macOS)
+- **No mount needed:** Extracts boot files via xorriso in Docker
+- **Fast setup:** One command to start, one command to stop
+
+### Documentation
+
+See **[README-PXE.md](README-PXE.md)** for:
+- DHCP configuration examples (router, ISC DHCP, Windows Server, dnsmasq)
+- Network requirements and firewall setup
+- Troubleshooting guide
+- Advanced topics (multi-boot, custom menu, testing)
+
+### Stopping the Server
+
+```powershell
+docker stop rocky-pxe-server
+```
 
 ## Notes
 

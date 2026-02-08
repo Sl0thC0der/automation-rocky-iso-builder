@@ -6,6 +6,11 @@ output/
 vm/
 NUL
 
+# PXE runtime files
+pxe/tftpboot/rocky/vmlinuz
+pxe/tftpboot/rocky/initrd.img
+pxe/tftpboot/pxelinux.cfg/default
+
 # === OS files ===
 # macOS
 .DS_Store

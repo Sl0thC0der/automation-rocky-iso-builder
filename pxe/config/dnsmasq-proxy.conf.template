@@ -1,0 +1,25 @@
+# dnsmasq configuration for PXE boot (DHCP Proxy mode)
+# Provides PXE boot information automatically without IP assignment
+
+# Disable DNS
+port=0
+
+# Network interface
+interface=eth0
+bind-interfaces
+
+# DHCP Proxy mode (provides PXE info only, no IP assignment)
+dhcp-range=0.0.0.0,proxy
+dhcp-boot=pxelinux.0
+pxe-service=x86PC,"Boot Rocky Linux from network",pxelinux
+
+# TFTP settings
+enable-tftp
+tftp-root=/tftpboot
+tftp-secure
+tftp-lowercase
+
+# Logging
+log-facility=/var/log/dnsmasq.log
+log-dhcp
+log-queries

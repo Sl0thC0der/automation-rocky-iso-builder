@@ -119,6 +119,137 @@ dnf -y install linux-firmware dracut-config-generic || true
 dnf -y install pciutils usbutils lshw || true
 dnf -y groupinstall "Hardware Monitoring Utilities" || true
 
+# ============================================================
+# CPU/APU DETECTION: Auto-configure AMD or Intel graphics
+# ============================================================
+
+CPU_VENDOR=$(lscpu | grep 'Vendor ID:' | awk '{print $3}')
+echo "Detected CPU vendor: $CPU_VENDOR"
+
+if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
+    echo "=== Configuring AMD CPU/APU ==="
+
+    # Install AMD GPU acceleration packages
+    dnf -y install \
+        mesa-vulkan-drivers \
+        vulkan-loader \
+        libvdpau \
+        libdrm || true
+
+    # Force amdgpu module to load at boot (creates /dev/dri/renderD* nodes)
+    echo "amdgpu" > /etc/modules-load.d/amdgpu.conf
+
+    # Blacklist simple-framebuffer so amdgpu binds to GPU properly
+    echo "blacklist simple-framebuffer" > /etc/modprobe.d/blacklist-simplefb.conf
+
+    echo "AMD GPU drivers configured (amdgpu, Vulkan, VDPAU)"
+
+elif [ "$CPU_VENDOR" = "GenuineIntel" ]; then
+    echo "=== Configuring Intel CPU/APU ==="
+
+    # Install Intel GPU acceleration packages
+    dnf -y install \
+        mesa-vulkan-drivers \
+        vulkan-loader \
+        libva \
+        libvdpau \
+        libdrm || true
+
+    # Intel-specific media drivers (for hardware video encoding/decoding)
+    # Try to install intel-media-driver (newer) and fall back to libva-intel-driver (legacy)
+    dnf -y install intel-media-driver || dnf -y install libva-intel-driver || true
+
+    # Force i915 module to load at boot (Intel integrated graphics)
+    echo "i915" > /etc/modules-load.d/i915.conf
+
+    # Enable GuC/HuC firmware for newer Intel GPUs (improves performance)
+    echo "options i915 enable_guc=3" > /etc/modprobe.d/i915.conf
+
+    # Blacklist simple-framebuffer so i915 binds properly
+    echo "blacklist simple-framebuffer" > /etc/modprobe.d/blacklist-simplefb.conf
+
+    echo "Intel GPU drivers configured (i915, Vulkan, VA-API)"
+
+else
+    echo "Unknown CPU vendor: $CPU_VENDOR (skipping CPU-specific GPU auto-config)"
+fi
+
+# ============================================================
+# NVIDIA GPU DETECTION: Check for discrete NVIDIA cards
+# ============================================================
+
+NVIDIA_GPU=$(lspci | grep -i 'vga.*nvidia\|3d.*nvidia\|display.*nvidia' || true)
+if [ -n "$NVIDIA_GPU" ]; then
+    echo "=== NVIDIA GPU detected ==="
+    echo "$NVIDIA_GPU"
+
+    # Install base Mesa drivers (for fallback/hybrid graphics)
+    dnf -y install \
+        mesa-vulkan-drivers \
+        vulkan-loader \
+        libvdpau \
+        libdrm || true
+
+    # Add RPMFusion repository (contains NVIDIA proprietary drivers)
+    echo "Adding RPMFusion repositories for NVIDIA drivers..."
+    dnf -y install https://download1.rpmfusion.org/free/el/rpmfusion-free-release-10.noarch.rpm || true
+    dnf -y install https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-10.noarch.rpm || true
+
+    # Install NVIDIA proprietary driver (auto-detects GPU model and installs correct version)
+    echo "Installing NVIDIA proprietary drivers (this may take several minutes)..."
+    dnf -y install akmod-nvidia || true
+    dnf -y install xorg-x11-drv-nvidia-cuda || true  # CUDA support
+    dnf -y install xorg-x11-drv-nvidia-cuda-libs || true  # CUDA libraries
+
+    # Blacklist nouveau (open-source driver conflicts with nvidia proprietary)
+    echo "blacklist nouveau" > /etc/modprobe.d/blacklist-nouveau.conf
+    echo "options nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+
+    # Configure dracut to include nvidia modules in initramfs
+    echo 'add_drivers+=" nvidia nvidia-modeset nvidia-drm nvidia-uvm "' > /etc/dracut.conf.d/gpu-driver.conf
+    echo 'force_drivers+=" nvidia nvidia-modeset nvidia-drm nvidia-uvm "' >> /etc/dracut.conf.d/gpu-driver.conf
+
+    # Enable nvidia-persistenced for better performance
+    systemctl enable nvidia-persistenced || true
+
+    echo "NVIDIA GPU: proprietary nvidia driver configured (high performance, CUDA enabled)"
+    echo "Note: Driver compilation will complete on first boot (akmod may take 2-5 minutes)"
+
+    # ALTERNATIVE: Use open-source nouveau driver (comment out above, uncomment below)
+    # Provides basic GPU support but limited performance/features - no CUDA
+    #
+    # echo "nouveau" > /etc/modules-load.d/nouveau.conf
+    # echo 'add_drivers+=" nouveau "' > /etc/dracut.conf.d/gpu-driver.conf
+    # echo "NVIDIA GPU: using open-source nouveau driver (basic support)"
+
+elif [ "$CPU_VENDOR" = "AuthenticAMD" ] || [ "$CPU_VENDOR" = "GenuineIntel" ]; then
+    echo "No discrete NVIDIA GPU detected, using integrated graphics only"
+fi
+
+# Configure dracut to include GPU drivers in initramfs and omit simpledrm
+# (simpledrm is built-in on Rocky 10, can't be omitted, but we try anyway)
+# Note: NVIDIA/nouveau creates its own dracut config above if detected
+mkdir -p /etc/dracut.conf.d
+if [ -z "$NVIDIA_GPU" ]; then
+    # No NVIDIA GPU, configure AMD or Intel
+    if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
+        echo 'add_drivers+=" amdgpu "' > /etc/dracut.conf.d/gpu-driver.conf
+    elif [ "$CPU_VENDOR" = "GenuineIntel" ]; then
+        echo 'add_drivers+=" i915 "' > /etc/dracut.conf.d/gpu-driver.conf
+    fi
+fi
+# Always try to omit simpledrm (even though it's built-in and won't work)
+if [ -f /etc/dracut.conf.d/gpu-driver.conf ]; then
+    echo 'omit_drivers+=" simpledrm simple-framebuffer "' >> /etc/dracut.conf.d/gpu-driver.conf
+fi
+
+# Disable simpledrm via kernel parameter (it's built-in, so must be blacklisted at boot)
+# Also remove nomodeset if present (it disables ALL GPU drivers)
+grubby --update-kernel=ALL --remove-args='nomodeset' || true
+grubby --update-kernel=ALL --args='initcall_blacklist=simpledrm_platform_driver_init' || true
+
+echo "GPU driver initramfs and kernel parameters configured"
+
 # Security tools
 dnf -y install \
   fail2ban \
@@ -305,7 +436,7 @@ SSHD
 cat > /etc/fail2ban/jail.local << 'F2B'
 [sshd]
 enabled = true
-banaction = nftables-multiport
+banaction = nftables-allports
 bantime = 3600
 findtime = 600
 maxretry = 3

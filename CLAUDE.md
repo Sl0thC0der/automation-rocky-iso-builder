@@ -65,6 +65,20 @@ The `-p` flag enables RPM pre-baking:
 4. Write ISO to USB with Rufus (DD mode) or `dd`
 5. Boot target machine — fully unattended install
 
+**Alternative: PXE Network Boot**
+
+Instead of USB/DVD, serve the ISO over the network:
+
+```powershell
+# Default mode (requires DHCP configuration)
+.\pxe\start_pxe_server.ps1
+
+# Proxy mode (fully automated, no DHCP config needed)
+.\pxe\start_pxe_server.ps1 -ProxyDHCP
+```
+
+Then PXE boot target machines. See `README-PXE.md` for setup instructions.
+
 ## Docker / Podman Coexistence Rules
 
 - Install **both** Docker Engine (from Docker's official RHEL repo) and Podman (from Rocky repos)
@@ -79,9 +93,15 @@ The `-p` flag enables RPM pre-baking:
 - Boot media detection in `%pre`: skips dd-written USB (iso9660), Ventoy (VTOYEFI/Ventoy labels), CD/DVD (not in list-harddrives); PXE has no media so all disks are wiped
 - `%post --nochroot`: detects pre-baked RPM repo on ISO, bind-mounts into chroot
 - `%post`: full `dnf update`, installs EPEL+CRB, installs Docker/Podman/Cockpit/fail2ban/DevOps tools, hardens SSH, configures kernel tuning, sets up cleanup timers
-- Firewalld is **masked** (not removed — `dnf remove firewalld` cascades and removes fail2ban); fail2ban uses `nftables-multiport` directly
+- Firewalld is **masked** (not removed — `dnf remove firewalld` cascades and removes fail2ban); fail2ban uses `nftables-allports` (native nftables)
 - Hostname set from DHCP via `hostname-mode=dhcp` in NetworkManager config
 - Password change script has `[ -t 0 ]` guard — only fires on interactive terminals
+- **GPU auto-detection**: Detects AMD/Intel/NVIDIA GPUs and installs appropriate drivers automatically
+  - **AMD APU:** amdgpu driver, Vulkan, VDPAU (auto-configured)
+  - **Intel iGPU:** i915 driver with GuC/HuC, Vulkan, VA-API (auto-configured)
+  - **NVIDIA GPU:** Proprietary nvidia driver from RPMFusion, CUDA support (auto-configured)
+  - Disables simpledrm via kernel parameter, creates `/dev/dri/renderD128` for GPU compute
+  - NVIDIA akmod compiles on first boot (2-5 minutes), reboot recommended after driver compilation
 
 ### Rocky 10 Package Gotchas
 

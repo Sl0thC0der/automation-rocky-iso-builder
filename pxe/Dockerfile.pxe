@@ -1,0 +1,35 @@
+FROM rockylinux:10
+
+# Install required packages
+RUN dnf -y install \
+    dnsmasq \
+    nginx \
+    supervisor \
+    syslinux \
+    xorriso \
+    && dnf clean all
+
+# Create directories
+RUN mkdir -p /tftpboot/pxelinux.cfg /var/www/html/iso /var/log/supervisor
+
+# Copy SYSLINUX bootloader files
+RUN cp /usr/share/syslinux/pxelinux.0 /tftpboot/ && \
+    cp /usr/share/syslinux/ldlinux.c32 /tftpboot/
+
+# Copy configuration files
+COPY config/dnsmasq.conf.template /etc/dnsmasq.conf.template
+COPY config/dnsmasq-proxy.conf.template /etc/dnsmasq-proxy.conf.template
+COPY config/nginx.conf /etc/nginx/nginx.conf
+COPY config/supervisord.conf /etc/supervisord.conf
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Expose ports
+# 69/UDP = TFTP
+# 80/TCP = HTTP
+# 67-68/UDP = DHCP (proxy mode only)
+EXPOSE 69/udp 80/tcp 67/udp 68/udp
+
+ENTRYPOINT ["/entrypoint.sh"]
